@@ -2,7 +2,7 @@
 
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
-from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QGraphicsItem,
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGraphicsItem,
                              QGraphicsObject, QGraphicsScene, QGraphicsView, QGroupBox,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
                              QVBoxLayout, QWidget)
@@ -92,16 +92,18 @@ class DesignItem(QGraphicsObject):
 class DesignerDialog(QDialog):
     """Dialog returning generated code in ``self.code`` when accepted."""
 
-    def __init__(self, parent=None, source=""):
+    def __init__(self, parent=None, source="", target=None):
         super().__init__(parent)
-        self.setWindowTitle("Window designer")
+        self.setWindowTitle("Designer")
         self.resize(980, 600)
         self.source = source
         self.code = ""
         self.loading = False
         self.design = model.parse_code(source)
         if not self.design["items"]:
-            self.design = model.new_design()
+            self.design = model.new_design(target or "GUI")
+        elif target and self.design["target"] != target:
+            self.design = model.new_design(target)
 
         self.scene = QGraphicsScene(self)
         self.view = QGraphicsView(self.scene)
@@ -121,13 +123,19 @@ class DesignerDialog(QDialog):
         hint.setWordWrap(True)
         palette_layout.addWidget(hint)
 
+        self.target_box = QComboBox()
+        self.target_box.addItem("Desktop window (GUI)", "GUI")
+        self.target_box.addItem("Web page (WebUI)", "WebUI")
+        self.target_box.setCurrentIndex(1 if self.design["target"] == "WebUI" else 0)
+        self.target_box.currentIndexChanged.connect(self.window_changed)
         self.title_edit = QLineEdit(self.design["title"])
         self.width_spin = self.spin(120, 3000, self.design["width"])
         self.height_spin = self.spin(80, 3000, self.design["height"])
         self.handlers_box = QCheckBox("Add click handlers for buttons")
         self.handlers_box.setChecked(True)
-        window_box = QGroupBox("Window")
+        window_box = QGroupBox("Window or page")
         window_form = QFormLayout(window_box)
+        window_form.addRow("Make a", self.target_box)
         window_form.addRow("Title", self.title_edit)
         window_form.addRow("Width", self.width_spin)
         window_form.addRow("Height", self.height_spin)
@@ -146,7 +154,7 @@ class DesignerDialog(QDialog):
         self.delete_button.clicked.connect(self.delete_selected)
         self.item_box = QGroupBox("Selected item")
         item_form = QFormLayout(self.item_box)
-        item_form.addRow("Id", self.id_edit)
+        item_form.addRow("Name", self.id_edit)
         item_form.addRow("Text / value", self.text_edit)
         item_form.addRow("X", self.x_spin)
         item_form.addRow("Y", self.y_spin)
@@ -158,10 +166,15 @@ class DesignerDialog(QDialog):
         for widget in (self.x_spin, self.y_spin, self.w_spin, self.h_spin):
             widget.valueChanged.connect(self.item_changed)
 
+        self.web_note = QLabel("A web page places items from top to bottom, in the order "
+                               "you arrange them here. Exact positions are not used.")
+        self.web_note.setWordWrap(True)
+        self.web_note.setVisible(self.design["target"] == "WebUI")
         side = QWidget()
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.addWidget(window_box)
+        side_layout.addWidget(self.web_note)
         side_layout.addWidget(self.item_box)
         side_layout.addStretch(1)
         side.setFixedWidth(290)
@@ -214,7 +227,7 @@ class DesignerDialog(QDialog):
     def add(self, kind):
         items = self.design["items"]
         below = max((d["y"] + d["h"] for d in items), default=10) + 10
-        height = model.KINDS[kind][3]
+        height = model.KINDS[kind][2]
         if below + height > self.design["height"]:
             below = 20
         data = model.add_item(self.design, kind, 20, below)
@@ -237,6 +250,9 @@ class DesignerDialog(QDialog):
 
     # -- forms -----------------------------------------------------------
     def window_changed(self):
+        self.design["target"] = self.target_box.currentData()
+        web = self.design["target"] == "WebUI"
+        self.web_note.setVisible(web)
         self.design["title"] = self.title_edit.text()
         self.design["width"] = self.width_spin.value()
         self.design["height"] = self.height_spin.value()
@@ -268,9 +284,8 @@ class DesignerDialog(QDialog):
         if item is None or self.loading:
             return
         data = item.data_
-        new_id = self.id_edit.text().strip().replace('"', "")
-        others = {d["id"].lower() for d in self.design["items"] if d is not data}
-        if new_id and new_id.lower() not in others:
+        new_id = self.id_edit.text().strip()
+        if model.valid_name(self.design, new_id, data):
             data["id"] = new_id
         data["text"] = self.text_edit.text()
         data["w"], data["h"] = self.w_spin.value(), self.h_spin.value()
