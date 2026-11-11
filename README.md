@@ -64,7 +64,7 @@ Items snap to a 5 pixel grid.
 ## Development
 
 ```bash
-python3 main.py examples.jdv
+python3 main.py
 QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests
 ```
 

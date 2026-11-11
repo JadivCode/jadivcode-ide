@@ -2,7 +2,7 @@
 
 import sys
 
-from jadivcode_ide.app import main
+from jadivcode_ide.launch import launch
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(launch())

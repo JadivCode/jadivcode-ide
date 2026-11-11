@@ -1,5 +1,5 @@
 import sys
 
-from .app import main
+from .launch import launch
 
-sys.exit(main())
+sys.exit(launch())
