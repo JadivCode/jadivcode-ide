@@ -63,6 +63,7 @@ class BlockItem(QGraphicsObject):
         painter.setBrush(QBrush(QColor("#ffffff")))
         painter.drawRoundedRect(body, 8, 8)
         header = QPainterPath()
+        header.setFillRule(Qt.WindingFill)
         header.addRoundedRect(QRectF(0, 0, WIDTH, 26), 8, 8)
         header.addRect(QRectF(0, 14, WIDTH, 12))
         painter.setPen(Qt.NoPen)
