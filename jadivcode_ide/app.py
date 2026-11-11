@@ -12,10 +12,10 @@ from PyQt5.QtWidgets import (QAction, QApplication, QDockWidget, QFileDialog, QH
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import __version__
-from .core import (CORE_VERSION, FILE_EXTENSION, LIBRARIES, apply_fixes, check_source,
-                   run_environment)
+from .core import CORE_VERSION, FILE_EXTENSION, apply_fixes, check_source, run_environment
 from .designer import DesignerDialog
 from .editor import SEVERITY_COLORS, CodeEditor
+from .reference import sections
 
 STARTER = """// A new JadivCode program
 Write = Hello, world!
@@ -104,8 +104,13 @@ class MainWindow(QMainWindow):
         self.act_stop = self.action("Stop", self.stop_program, "Ctrl+F5", "Stop the program")
         self.act_fix = self.action("Fix all", self.fix_all, "Ctrl+Shift+F",
                                    "Apply every automatic fix")
-        self.act_designer = self.action("Window designer...", self.open_designer, "Ctrl+D",
-                                        "Design a GUI window with the mouse")
+        self.act_designer = self.action("Window designer", self.open_designer, "Ctrl+D",
+                                        "Design a desktop window with the mouse")
+        self.act_web_designer = self.action("Web page designer",
+                                            lambda: self.open_designer("WebUI"), "Ctrl+Shift+D",
+                                            "Design a web page with the mouse")
+        self.act_blocks = self.action("Blocks", self.open_blocks, "Ctrl+B",
+                                      "Build a program by connecting blocks")
         self.act_ai = self.action("Ask AI...", self.ask_ai, None,
                                   "Explain the problems with the optional AI helper")
         self.act_docs = self.action("Documentation", self.open_docs, "F1")
@@ -125,7 +130,9 @@ class MainWindow(QMainWindow):
         for action in (self.act_run, self.act_sim, self.act_stop):
             menu.addAction(action)
         menu = self.menuBar().addMenu("&Tools")
+        menu.addAction(self.act_blocks)
         menu.addAction(self.act_designer)
+        menu.addAction(self.act_web_designer)
         menu.addAction(self.act_ai)
         menu = self.menuBar().addMenu("&Help")
         menu.addAction(self.act_docs)
@@ -135,8 +142,8 @@ class MainWindow(QMainWindow):
         bar.setMovable(False)
         bar.setToolButtonStyle(Qt.ToolButtonTextOnly)
         for action in (self.act_new, self.act_open, self.act_save, None, self.act_run,
-                       self.act_sim, self.act_stop, None, self.act_fix, self.act_designer,
-                       self.act_ai):
+                       self.act_sim, self.act_stop, None, self.act_fix, self.act_blocks,
+                       self.act_designer, self.act_web_designer, self.act_ai):
             if action is None:
                 bar.addSeparator()
             else:
@@ -195,34 +202,76 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, dock)
 
     def build_library_dock(self):
+        """The Help panel: the whole language and every library, searchable."""
+        self.help_search = QLineEdit()
+        self.help_search.setPlaceholderText("Search the help (for example: button, loop, wait)")
+        self.help_search.setClearButtonEnabled(True)
+        self.help_search.textChanged.connect(self.filter_help)
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Command", "What it does"])
-        for cls in LIBRARIES.values():
-            top = QTreeWidgetItem([cls.name, cls.summary])
-            top.setData(0, Qt.UserRole, f"Import {cls.name}")
-            for command, description in cls.commands:
-                child = QTreeWidgetItem([command, description])
-                child.setData(0, Qt.UserRole, command)
-                child.setToolTip(0, command)
-                child.setToolTip(1, description)
+        tree.setHeaderHidden(True)
+        for title, entries in sections():
+            top = QTreeWidgetItem([title])
+            font = top.font(0)
+            font.setBold(True)
+            top.setFont(0, font)
+            for name, insert, explanation in entries:
+                child = QTreeWidgetItem([name])
+                child.setData(0, Qt.UserRole, insert)
+                child.setData(0, Qt.UserRole + 1, explanation)
+                child.setToolTip(0, explanation)
                 top.addChild(child)
             tree.addTopLevelItem(top)
-        tree.setColumnWidth(0, 230)
+        tree.currentItemChanged.connect(self.show_help)
         tree.itemDoubleClicked.connect(
             lambda item, _column: self.insert_line(item.data(0, Qt.UserRole)))
-        note = QLabel("Double-click a command to insert it.")
+        self.help_tree = tree
+        self.help_text = QPlainTextEdit()
+        self.help_text.setReadOnly(True)
+        self.help_text.setFont(self.editor.font())
+        self.help_text.setMaximumHeight(130)
+        self.help_text.setPlaceholderText(
+            "Select an entry to see what it does.\nDouble-click to insert it into the program.")
+        insert_button = QPushButton("Insert into program")
+        insert_button.clicked.connect(lambda: self.insert_line(
+            tree.currentItem().data(0, Qt.UserRole) if tree.currentItem() else None))
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(tree)
-        layout.addWidget(note)
-        dock = QDockWidget("Libraries", self)
-        dock.setObjectName("libraries")
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.help_search)
+        layout.addWidget(tree, 1)
+        layout.addWidget(self.help_text)
+        layout.addWidget(insert_button)
+        dock = QDockWidget("Help", self)
+        dock.setObjectName("help")
         dock.setWidget(page)
         dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self.menuBar().addMenu("&View").addAction(dock.toggleViewAction())
         self.resizeDocks([dock], [380], Qt.Horizontal)
+
+    def show_help(self, item, _previous=None):
+        if item is None or item.childCount():
+            self.help_text.setPlainText("")
+            return
+        insert = item.data(0, Qt.UserRole) or ""
+        explanation = item.data(0, Qt.UserRole + 1) or ""
+        self.help_text.setPlainText(explanation + ("\n\nExample:\n" + insert if insert else ""))
+
+    def filter_help(self, text):
+        words = text.lower().split()
+        for index in range(self.help_tree.topLevelItemCount()):
+            top = self.help_tree.topLevelItem(index)
+            shown = 0
+            for row in range(top.childCount()):
+                child = top.child(row)
+                haystack = " ".join([top.text(0), child.text(0),
+                                     child.data(0, Qt.UserRole) or "",
+                                     child.data(0, Qt.UserRole + 1) or ""]).lower()
+                match = all(word in haystack for word in words)
+                child.setHidden(not match)
+                shown += match
+            top.setHidden(shown == 0)
+            top.setExpanded(bool(words) and shown > 0)
 
     # ------------------------------------------------------------------
     # Files
@@ -485,10 +534,19 @@ class MainWindow(QMainWindow):
         self.editor.setTextCursor(cursor)
         self.editor.setFocus()
 
-    def open_designer(self):
-        dialog = DesignerDialog(self, self.editor.toPlainText())
+    def open_designer(self, target="GUI"):
+        dialog = DesignerDialog(self, self.editor.toPlainText(), target)
         if dialog.exec_() == DesignerDialog.Accepted and dialog.code:
             self.insert_line(dialog.code.rstrip("\n"))
+
+    def open_blocks(self):
+        from .blocks import BlocksDialog
+        dialog = BlocksDialog(self, self.editor.toPlainText())
+        if dialog.exec_() == BlocksDialog.Accepted and dialog.code:
+            if dialog.replace:
+                self.editor.replace_all(dialog.code)
+            else:
+                self.insert_line(dialog.code.rstrip("\n"))
 
     def ask_ai(self):
         if self.ai_worker is not None:
