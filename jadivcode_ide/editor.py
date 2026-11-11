@@ -213,7 +213,7 @@ class CodeEditor(QPlainTextEdit):
             word = text.strip().split(" ")[0].lower() if text.strip() else ""
             opens = word in ("repeat", "while", "forever", "for", "function", "else") or \
                 (word == "if" and not re.search(r"(?i)\bthen\s+\S", text)) or \
-                (word == "on" and not text.rstrip().endswith(('"', "loop")))
+                (word == "on" and "=" not in text and not text.rstrip().lower().endswith("loop"))
             super().keyPressEvent(event)
             self.insertPlainText(indent + ("    " if opens else ""))
             return
