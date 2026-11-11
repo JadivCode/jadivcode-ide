@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "publisher": "JadivCode",
+  "repo": "jadivcode-ide",
+  "homepage": "https://github.com/JadivCode/jadivcode-ide",
+  "apps": [
+    {
+      "id": "jadivcode-ide",
+      "name": "JadivCode IDE",
+      "tagline": "Editor, checker and window designer for the JadivCode language",
+      "description": "A desktop editor for JadivCode with syntax colors, live checking with one-click fixes, a run console, a visual GUI window designer and a library browser. Needs the JadivCode interpreter, which the installer of JadivCode provides.",
+      "category": "Developer Tools",
+      "version": "0.1.0",
+      "author": "JapySoft",
+      "icon": "assets/jadivcode-ide.svg",
+      "subdir": ".",
+      "entrypoint": "main.py",
+      "run": "python3 main.py",
+      "requirements": "requirements.txt",
+      "update_method": "sync",
+      "maintained": true
+    }
+  ]
+}
