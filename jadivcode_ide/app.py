@@ -522,7 +522,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "About JadivCode IDE",
             f"JadivCode IDE {__version__}\nJadivCode {CORE_VERSION}\n\n"
-            f"Documentation: {DOCS_URL}\nLicensed under the Apache License 2.0.")
+            f"Documentation: {DOCS_URL}\nLicensed under the MIT License.")
 
 
 def main(argv=None):

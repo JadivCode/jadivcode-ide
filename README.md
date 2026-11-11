@@ -73,4 +73,4 @@ path, or in the folder named by the `JADIVCODE_HOME` environment variable.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE).
