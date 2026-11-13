@@ -4,15 +4,17 @@ import os
 import sys
 import tempfile
 
-from PyQt5.QtCore import QProcess, QProcessEnvironment, QThread, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import (QProcess, QProcessEnvironment, QSettings, QThread, QTimer, Qt,
+                          pyqtSignal)
 from PyQt5.QtGui import QColor, QIcon, QKeySequence, QTextCharFormat, QTextCursor
 from PyQt5.QtWidgets import (QAction, QApplication, QDockWidget, QFileDialog, QHBoxLayout,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
                              QMessageBox, QPlainTextEdit, QPushButton, QTabWidget,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import __version__
-from .core import CORE_VERSION, FILE_EXTENSION, apply_fixes, check_source, run_environment
+from . import __version__, updater
+from .core import (CORE_PATH, CORE_VERSION, FILE_EXTENSION, apply_fixes, check_source,
+                   run_environment)
 from .designer import DesignerDialog
 from .editor import SEVERITY_COLORS, CodeEditor
 from .reference import sections
@@ -42,6 +44,45 @@ class AIWorker(QThread):
             self.finished_text.emit(formatter() if formatter else str(exc), False)
 
 
+def installed_products():
+    """Versions and locations of the two programs the IDE can update."""
+    ide_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    core_dir = CORE_PATH
+    if core_dir is None:
+        import jadivcode
+        core_dir = os.path.dirname(os.path.dirname(os.path.abspath(jadivcode.__file__)))
+    return {"JadivCode": (CORE_VERSION, core_dir), "JadivCode IDE": (__version__, ide_dir)}
+
+
+class UpdateWorker(QThread):
+    """Looks for updates, or downloads the installers, without freezing the window."""
+
+    checked = pyqtSignal(list, str)      # results, error message
+    prepared = pyqtSignal(list, str)     # [(name, script path)], error message
+
+    def __init__(self, names=None, parent=None):
+        super().__init__(parent)
+        self.names = names
+
+    def run(self):
+        try:
+            if self.names is None:
+                self.checked.emit(updater.check(installed_products()), "")
+                return
+            scripts = []
+            for name in self.names:
+                handle, path = tempfile.mkstemp(suffix=".sh", prefix="jadivcode-update-")
+                with os.fdopen(handle, "w", encoding="utf-8") as script:
+                    script.write(updater.installer_script(name))
+                scripts.append((name, path))
+            self.prepared.emit(scripts, "")
+        except Exception as exc:  # noqa: BLE001 - report every failure to the user
+            if self.names is None:
+                self.checked.emit([], str(exc))
+            else:
+                self.prepared.emit([], str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, path=None):
         super().__init__()
@@ -49,6 +90,10 @@ class MainWindow(QMainWindow):
         self.process = None
         self.temp_file = None
         self.ai_worker = None
+        self.update_worker = None
+        self.update_queue = []
+        self.update_process = None
+        self.settings = QSettings("JadivCode", "IDE")
         self.diagnostics = []
         self.resize(1180, 760)
 
@@ -81,6 +126,9 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_status()
         self.run_check()
+        if self.act_auto_update.isChecked() and not os.environ.get("JADIVCODE_NO_UPDATE_CHECK"):
+            # Wait until the window is up, then look quietly in the background.
+            QTimer.singleShot(1500, lambda: self.check_updates(silent=True))
 
     # ------------------------------------------------------------------
     # Building the window
@@ -114,6 +162,14 @@ class MainWindow(QMainWindow):
         self.act_ai = self.action("Ask AI...", self.ask_ai, None,
                                   "Explain the problems with the optional AI helper")
         self.act_docs = self.action("Documentation", self.open_docs, "F1")
+        self.act_update = self.action("Check for updates...", self.check_updates, None,
+                                      "Look for a newer JadivCode and JadivCode IDE")
+        self.act_auto_update = QAction("Check for updates at start", self)
+        self.act_auto_update.setCheckable(True)
+        self.act_auto_update.setChecked(
+            self.settings.value("check_updates_at_start", True, type=bool))
+        self.act_auto_update.toggled.connect(
+            lambda on: self.settings.setValue("check_updates_at_start", on))
         self.act_stop.setEnabled(False)
 
         menu = self.menuBar().addMenu("&File")
@@ -136,6 +192,10 @@ class MainWindow(QMainWindow):
         menu.addAction(self.act_ai)
         menu = self.menuBar().addMenu("&Help")
         menu.addAction(self.act_docs)
+        menu.addSeparator()
+        menu.addAction(self.act_update)
+        menu.addAction(self.act_auto_update)
+        menu.addSeparator()
         menu.addAction(self.action("About", self.about))
 
         bar = self.addToolBar("Main")
@@ -362,6 +422,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.stop_program()
+        self.finish_worker()
         if self.temp_file:
             try:
                 os.remove(self.temp_file)
@@ -536,17 +597,22 @@ class MainWindow(QMainWindow):
 
     def open_designer(self, target="GUI"):
         dialog = DesignerDialog(self, self.editor.toPlainText(), target)
-        if dialog.exec_() == DesignerDialog.Accepted and dialog.code:
+        if dialog.exec_() != DesignerDialog.Accepted:
+            return
+        if dialog.merged is not None:
+            # The window or page was already in the program: update it in place.
+            self.editor.replace_all(dialog.merged)
+        elif dialog.code:
             self.insert_line(dialog.code.rstrip("\n"))
+        self.run_check()
 
     def open_blocks(self):
         from .blocks import BlocksDialog
         dialog = BlocksDialog(self, self.editor.toPlainText())
-        if dialog.exec_() == BlocksDialog.Accepted and dialog.code:
-            if dialog.replace:
-                self.editor.replace_all(dialog.code)
-            else:
-                self.insert_line(dialog.code.rstrip("\n"))
+        if dialog.exec_() == BlocksDialog.Accepted:
+            # The blocks show the whole program, so they replace all of it.
+            self.editor.replace_all(dialog.code)
+            self.run_check()
 
     def ask_ai(self):
         if self.ai_worker is not None:
@@ -570,6 +636,128 @@ class MainWindow(QMainWindow):
         self.act_ai.setEnabled(True)
         self.ai_worker.wait()
         self.ai_worker = None
+
+    # ------------------------------------------------------------------
+    # Updates
+    # ------------------------------------------------------------------
+    def check_updates(self, silent=False):
+        """Look for newer versions. ``silent`` is the check made at start."""
+        if self.update_worker is not None or self.update_process is not None:
+            return
+        self.update_silent = silent
+        if not silent:
+            self.statusBar().showMessage("Looking for updates...")
+        self.update_worker = UpdateWorker(parent=self)
+        self.update_worker.checked.connect(self.updates_checked)
+        self.update_worker.start()
+
+    def finish_worker(self):
+        if self.update_worker is not None:
+            self.update_worker.wait()
+            self.update_worker = None
+
+    def updates_checked(self, results, error):
+        self.finish_worker()
+        silent = getattr(self, "update_silent", False)
+        if error:
+            # At start a failed check (no internet, for example) is not worth a dialog.
+            if not silent:
+                self.statusBar().clearMessage()
+                QMessageBox.warning(self, "Updates", f"Could not look for updates.\n\n{error}")
+            return
+        text = updater.summary(results)
+        newer = [r for r in results if r["newer"]]
+        if not newer:
+            if not silent:
+                self.statusBar().showMessage(text, 6000)
+                QMessageBox.information(self, "Updates", text)
+            return
+        self.statusBar().showMessage(text + " Use Help > Check for updates.", 15000)
+        if silent and self.settings.value("update_declined", "") == self.update_key(newer):
+            return  # already said no to exactly this update
+        self.offer_update(newer)
+
+    @staticmethod
+    def update_key(newer):
+        return ";".join(f"{r['name']}={r['latest']}" for r in newer)
+
+    def offer_update(self, newer):
+        ours = [r for r in newer if r["managed"]]
+        theirs = [r for r in newer if not r["managed"]]
+        lines = [f"{r['name']}: {r['installed']}  ->  {r['latest']}" for r in newer]
+        text = "A newer version is available.\n\n" + "\n".join(lines)
+        if theirs:
+            text += ("\n\n" + ", ".join(r["name"] for r in theirs) + " was not installed "
+                     "with the JadivCode installer (for example it runs from a git folder "
+                     "or from Code Master), so update it the way you installed it.")
+        if not ours:
+            QMessageBox.information(self, "Updates", text)
+            self.settings.setValue("update_declined", self.update_key(newer))
+            return
+        text += ("\n\nUpdate " + " and ".join(r["name"] for r in ours) + " now? "
+                 "This downloads and runs the project's installer from GitHub. "
+                 "Your programs are not touched.")
+        answer = QMessageBox.question(self, "Updates", text,
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer != QMessageBox.Yes:
+            self.settings.setValue("update_declined", self.update_key(newer))
+            return
+        self.tabs.setCurrentIndex(1)
+        self.output.clear()
+        self.append_output("Downloading the update...\n", "#8a90a2")
+        self.act_update.setEnabled(False)
+        self.update_worker = UpdateWorker([r["name"] for r in ours], self)
+        self.update_worker.prepared.connect(self.updates_prepared)
+        self.update_worker.start()
+
+    def updates_prepared(self, scripts, error):
+        self.finish_worker()
+        if error:
+            self.act_update.setEnabled(True)
+            self.append_output(f"The update failed: {error}\n", SEVERITY_COLORS["error"])
+            QMessageBox.warning(self, "Updates", f"The update could not be downloaded.\n\n{error}")
+            return
+        self.update_queue = list(scripts)
+        self.update_failed = False
+        self.run_next_installer()
+
+    def run_next_installer(self):
+        if not self.update_queue:
+            self.act_update.setEnabled(True)
+            self.update_process = None
+            if self.update_failed:
+                QMessageBox.warning(self, "Updates",
+                                    "The update did not finish. See the Output tab.")
+            else:
+                self.append_output("\nUpdate finished.\n", "#8a90a2")
+                QMessageBox.information(
+                    self, "Updates",
+                    "The update is installed. Close and start the IDE again to use it.")
+            return
+        name, path = self.update_queue.pop(0)
+        self.append_output(f"\nUpdating {name}...\n", "#8a90a2")
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.readyReadStandardOutput.connect(
+            lambda: self.append_output(bytes(process.readAllStandardOutput()).decode(
+                "utf-8", "replace")))
+
+        def done(code, _status=None, path=path, process=process):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            if code != 0:
+                self.update_failed = True
+                self.update_queue = []
+                self.append_output(f"The installer ended with code {code}.\n",
+                                   SEVERITY_COLORS["error"])
+            process.deleteLater()
+            self.run_next_installer()
+
+        process.finished.connect(done)
+        self.update_process = process
+        process.start("bash", [path])
 
     def open_docs(self):
         from PyQt5.QtCore import QUrl
