@@ -47,7 +47,10 @@ class DesignerModelTest(unittest.TestCase):
         parsed = model.parse_code(model.generate_code(design))
         self.assertEqual(parsed["title"], "My 'best' app")
         self.assertEqual((parsed["width"], parsed["height"]), (400, 300))
-        self.assertEqual(parsed["items"], design["items"])
+        self.assertEqual([{k: v for k, v in item.items() if k != "orig"}
+                          for item in parsed["items"]], design["items"])
+        self.assertEqual([item["orig"] for item in parsed["items"]],
+                         ["Text1", "Button1", "Slider1"])
         web = model.parse_code(model.generate_code(self.design("WebUI")))
         self.assertEqual(web["target"], "WebUI")
         self.assertEqual([i["id"] for i in web["items"]], ["Text1", "Button1", "Slider1"])
@@ -124,59 +127,97 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class BlocksModelTest(unittest.TestCase):
-    def graph(self):
-        from jadivcode_ide import blocks_model as blocks
-        graph = blocks.new_graph()
-        start = graph["blocks"][0]["id"]
-        define = blocks.add_block(graph, "define", 40, 150)
-        repeat = blocks.add_block(graph, "repeat", 40, 270)
-        change = blocks.add_block(graph, "set", 300, 390)
-        check = blocks.add_block(graph, "if", 40, 510)
-        yes = blocks.add_block(graph, "write", 40, 630)
-        no = blocks.add_block(graph, "write", 300, 630)
-        event = blocks.add_block(graph, "event", 600, 30)
-        shout = blocks.add_block(graph, "write", 600, 150)
-        blocks.add_block(graph, "wait", 900, 900)
-        yes["params"]["text"] = "big {Count}"
-        no["params"]["text"] = "small"
-        check["params"]["cond"] = "Count >= 3"
-        event["params"]["name"] = "Count"
-        self.assertTrue(blocks.link(graph, start, "next", define["id"]))
-        blocks.link(graph, define["id"], "next", repeat["id"])
-        blocks.link(graph, repeat["id"], "inside", change["id"])
-        blocks.link(graph, repeat["id"], "next", check["id"])
-        blocks.link(graph, check["id"], "yes", yes["id"])
-        blocks.link(graph, check["id"], "no", no["id"])
-        blocks.link(graph, event["id"], "next", shout["id"])
-        self.assertFalse(blocks.link(graph, define["id"], "next", start))
-        self.assertFalse(blocks.link(graph, define["id"], "yes", repeat["id"]))
-        return blocks, graph
+PROGRAM = """// Count and report
+Import Math
 
-    def test_generated_program(self):
-        blocks, graph = self.graph()
-        code, loose = blocks.generate_code(graph)
-        self.assertEqual(loose, 1)
-        expected = ["Define Count = 0", "Repeat 3 times", "    Set Count = Count + 1", "End",
-                    "If Count >= 3", "    Write = big {Count}", "Else", "    Write = small",
-                    "End", "", "On Count", "    Write = Hello, world!", "End"]
-        self.assertEqual(code.splitlines()[:len(expected)], expected)
+Define Count = 0
+Repeat 3 times
+    Set Count = Count + 1
+End
+
+If Count >= 3
+    Write = big {Count}
+Else If Count = 2
+    Write = two
+Else
+    Write = small
+End
+
+For I = 1 to 2
+    Write = round {I}
+End
+
+On Count "Write = one line" Else loop
+On Count
+    Write = used
+End
+Forever
+    Break
+End
+Write = done
+"""
+
+
+class BlocksModelTest(unittest.TestCase):
+    def setUp(self):
+        from jadivcode_ide import blocks_model
+        self.blocks = blocks_model
+
+    def test_text_to_blocks_and_back_is_exact(self):
+        graph = self.blocks.from_code(PROGRAM)
+        text, loose = self.blocks.program_text(graph)
+        self.assertEqual(text, PROGRAM)
+        self.assertEqual(loose, 0)
+        kinds = [b["type"] for b in graph["blocks"]]
+        for kind in ("start", "line", "define", "repeat", "set", "if", "write", "group",
+                     "event", "forever"):
+            self.assertIn(kind, kinds)
+        self.assertEqual(kinds.count("if"), 2)      # Else If is a second If block
+        self.assertEqual(kinds.count("event"), 1)   # the one-line On stays a line
+
+    def test_layout_is_kept_while_text_is_unchanged(self):
+        graph = self.blocks.from_code(PROGRAM)
+        graph["blocks"][3]["x"] = 777
+        stored, _ = self.blocks.generate_code(graph)
+        again = self.blocks.parse_code(stored)
+        self.assertEqual(again["blocks"][3]["x"], 777)
+        # Editing the text by hand wins over the stored layout.
+        edited = stored.replace("Write = done", "Write = finished")
+        fresh = self.blocks.parse_code(edited)
+        self.assertNotEqual(fresh["blocks"][3]["x"], 777)
+        self.assertIn("Write = finished", self.blocks.program_text(fresh)[0])
+
+    def test_editing_blocks_changes_the_text(self):
+        blocks = self.blocks
+        graph = blocks.from_code("Define A = 1\nWrite = {A}\n")
+        define = [b for b in graph["blocks"] if b["type"] == "define"][0]
+        write = [b for b in graph["blocks"] if b["type"] == "write"][0]
+        define["params"]["value"] = "5"
+        extra = blocks.append_code(graph, "If A > 3\n    Write = big\nEnd", define["id"])
+        blocks.link(graph, extra[0], "next", write["id"])
+        self.assertEqual(blocks.program_text(graph)[0],
+                         "Define A = 5\nIf A > 3\n    Write = big\nEnd\nWrite = {A}\n")
         from jadivcode.interpreter import Runtime
         out = []
-        Runtime(out=out.append, err=out.append).run_source(
-            code.replace("On Count\n    Write = Hello, world!\nEnd\n", ""))
-        self.assertEqual(out, ["big 3"])
+        Runtime(out=out.append, err=out.append).run_source(blocks.program_text(graph)[0])
+        self.assertEqual(out, ["big", "5"])
 
-    def test_round_trip_and_cycles(self):
-        blocks, graph = self.graph()
-        code, _ = blocks.generate_code(graph)
-        again = blocks.parse_code(code)
-        self.assertEqual(blocks.generate_code(again)[0], code)
-        ids = {b["type"]: b["id"] for b in graph["blocks"]}
-        blocks.link(graph, ids["set"], "next", ids["repeat"])
-        self.assertIn("goes back to an earlier block", blocks.generate_code(graph)[0])
-        self.assertIsNone(blocks.parse_code("Write = hi\n"))
-        self.assertIsNone(blocks.parse_code(blocks.MARKER + "not json"))
+    def test_links_loops_and_old_format(self):
+        blocks = self.blocks
+        graph = blocks.from_code("Define A = 1\nWrite = a\n")
+        start, define, write = [b["id"] for b in graph["blocks"]]
+        self.assertFalse(blocks.link(graph, define, "next", start))
+        self.assertFalse(blocks.link(graph, define, "yes", write))
+        blocks.link(graph, write, "next", define)
+        self.assertIn("goes back to an earlier block", blocks.program_text(graph)[0])
+        old = ('// blocks: {"blocks":[{"id":1,"type":"start","x":0,"y":0,"params":{}},'
+               '{"id":2,"type":"event","x":300,"y":0,"params":{"name":"Go"}},'
+               '{"id":3,"type":"write","x":300,"y":100,"params":{"text":"hi"}}],'
+               '"links":[{"from":2,"port":"next","to":3}],"next_id":4}')
+        graph = blocks.parse_code("On Go\n    Write = hi\nEnd\n" + old + "\n")
+        self.assertEqual(blocks.program_text(graph)[0], "On Go\n    Write = hi\nEnd\n")
+        self.assertEqual(blocks.find(graph, 2)["x"], 300)
+        self.assertEqual(blocks.program_text(blocks.parse_code(blocks.MARKER + "not json"))[0], "")
 
 
 class NewToolsWindowTest(unittest.TestCase):
@@ -194,29 +235,118 @@ class NewToolsWindowTest(unittest.TestCase):
         window.help_search.setText("slider")
         shown = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())
                  if not tree.topLevelItem(i).isHidden()]
-        self.assertEqual(shown, ["Library: GUI", "Library: WebUI"])
+        self.assertEqual(shown, ["Recipes: complete examples", "Library: GUI",
+                                 "Library: WebUI"])
         window.editor.document().setModified(False)
         window.close()
 
-    def test_web_designer_and_blocks_dialog(self):
-        from jadivcode_ide.blocks import BlocksDialog
+    def test_web_designer(self):
         from jadivcode_ide.designer import DesignerDialog
         dialog = DesignerDialog(None, "", "WebUI")
         dialog.add("Text")
         dialog.add("Button")
         dialog.accept()
+        self.assertIsNone(dialog.merged)
         self.assertEqual(dialog.code.splitlines()[:5], [
             "Import WebUI", "", 'WebUI Title = "My app"', "",
             'Define Text1 = WebUI Text "Text"'])
         self.assertIn("On Button1", dialog.code)
         self.assertEqual([d.code for d in check_source(dialog.code) if d.severity == "error"], [])
 
-        blocks = BlocksDialog(None, "")
-        blocks.items[1].setSelected(True)
-        blocks.add("write")
-        blocks.add("wait")
-        blocks.accept()
-        self.assertTrue(blocks.replace)
-        self.assertEqual(blocks.code.splitlines()[:2], ["Write = Hello, world!", "Wait 1s"])
-        reopened = BlocksDialog(None, blocks.code)
-        self.assertEqual(len(reopened.items), 3)
+    def test_designer_updates_the_program_in_place(self):
+        from jadivcode_ide.app import MainWindow
+        from jadivcode_ide.designer import DesignerDialog
+        source = ('// my app\nImport GUI\n\nGUI Title = Counter\nGUI Size = 260x150\n\n'
+                  'Define Message = GUI Text "Count: 0" at 20, 20 size 220, 30\n'
+                  'Define More = GUI Button "Add one" at 20, 70 size 100, 36\n'
+                  'Define Reset = GUI Button "Reset" at 140, 70 size 100, 36\n\n'
+                  'Define Count = 0\n\nOn More\n    Set Count = Count + 1\n'
+                  '    Set Message = Count: {Count}\nEnd\n\nOn Reset\n    Set Count = 0\nEnd\n')
+        window = MainWindow()
+        window.editor.setPlainText(source)
+        dialog = DesignerDialog(window, window.editor.toPlainText(), "GUI")
+        self.assertEqual([i["id"] for i in dialog.design["items"]], ["Message", "More", "Reset"])
+        dialog.design["items"][1]["id"] = "Plus"
+        dialog.design["items"][1]["x"] = 40
+        del dialog.design["items"][2]
+        dialog.title_edit.setText("Clicks")
+        dialog.accept()
+        window.editor.replace_all(dialog.merged)
+        text = window.editor.toPlainText()
+        self.assertIn('GUI Title = "Clicks"', text)
+        self.assertIn('Define Plus = GUI Button "Add one" at 40, 70 size 100, 36', text)
+        self.assertIn("On Plus\n    Set Count = Count + 1", text)
+        self.assertNotIn("Reset", text)
+        self.assertNotIn("More", text)
+        self.assertTrue(text.startswith("// my app\nImport GUI\n"))
+        self.assertEqual(text.count("Define Message"), 1)
+        window.run_check()
+        self.assertEqual([d for d in window.diagnostics if d.severity == "error"], [])
+        # Opening the designer again reads the updated program.
+        again = DesignerDialog(window, text, "GUI")
+        self.assertEqual([i["id"] for i in again.design["items"]], ["Message", "Plus"])
+        window.editor.document().setModified(False)
+        window.close()
+
+    def test_blocks_dialog_is_two_way(self):
+        from jadivcode_ide.blocks import BlocksDialog
+        dialog = BlocksDialog(None, PROGRAM)
+        self.assertEqual(len(dialog.items), len(dialog.graph["blocks"]))
+        # Change a block, add one from the palette and one from the help.
+        write = [b for b in dialog.graph["blocks"] if b["params"].get("text") == "done"][0]
+        dialog.items[write["id"]].setSelected(True)
+        dialog.fields["text"].setText("finished")
+        dialog.param_changed(dialog.items[write["id"]], "text", "finished")
+        dialog.add("wait")
+        dialog.help_search.setText("for each")
+        tree = dialog.help_tree
+        entry = None
+        for index in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(index)
+            for row in range(top.childCount()):
+                if top.child(row).text(0) == "For each" and not top.child(row).isHidden():
+                    entry = top.child(row)
+        tree.setCurrentItem(entry)
+        self.assertTrue(dialog.help_add.isEnabled())
+        dialog.add_help_example()
+        dialog.accept()
+        text = "\n".join(l for l in dialog.code.splitlines() if not l.startswith("// blocks:"))
+        self.assertTrue(text.startswith("// Count and report\nImport Math\n"))
+        self.assertTrue(text.rstrip().endswith(
+            "Write = finished\nWait 1s\nFor each Item in Items\n    Write = {Item}\nEnd"))
+        # The text made by the blocks opens as the same blocks again.
+        again = BlocksDialog(None, dialog.code)
+        self.assertEqual(len(again.items), len(dialog.items))
+        self.assertEqual(again.graph["blocks"], dialog.graph["blocks"])
+
+    def test_blocks_help_has_recipes_for_windows(self):
+        from jadivcode_ide.blocks import BlocksDialog
+        dialog = BlocksDialog(None, "")
+        tree = dialog.help_tree
+        titles = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+        self.assertEqual(titles[:2], ["Using blocks", "Recipes: complete examples"])
+        for name in ("Library: GUI", "Library: WebUI", "Library: GPIO", "Library: Web"):
+            self.assertIn(name, titles)
+        recipes = tree.topLevelItem(1)
+        entry = [recipes.child(i) for i in range(recipes.childCount())
+                 if recipes.child(i).text(0) == "A window with a button"][0]
+        tree.setCurrentItem(entry)
+        dialog.add_help_example()
+        dialog.accept()
+        text = "\n".join(l for l in dialog.code.splitlines() if not l.startswith("// blocks:"))
+        self.assertIn('Define Go = GUI Button "Press me" at 20, 60', text)
+        self.assertIn("On Go\n    Set Message = Pressed\nEnd", text)
+        self.assertEqual([d.code for d in check_source(text) if d.severity == "error"], [])
+        kinds = [b["type"] for b in dialog.graph["blocks"]]
+        self.assertIn("event", kinds)
+        self.assertEqual(kinds.count("define"), 2)
+
+    def test_blocks_from_the_main_window(self):
+        from jadivcode_ide.app import MainWindow
+        from jadivcode_ide import blocks_model
+        window = MainWindow()
+        window.editor.setPlainText("Define A = 1\nIf A = 1\n    Write = one\nEnd\n")
+        graph = blocks_model.parse_code(window.editor.toPlainText())
+        self.assertEqual([b["type"] for b in graph["blocks"]], ["start", "define", "if", "write"])
+        window.editor.document().setModified(False)
+        window.close()

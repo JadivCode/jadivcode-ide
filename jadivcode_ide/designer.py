@@ -98,6 +98,7 @@ class DesignerDialog(QDialog):
         self.resize(980, 600)
         self.source = source
         self.code = ""
+        self.merged = None
         self.loading = False
         self.design = model.parse_code(source)
         if not self.design["items"]:
@@ -180,7 +181,10 @@ class DesignerDialog(QDialog):
         side.setFixedWidth(290)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Insert code")
+        existing = bool(self.design["items"]) and self.design.get("target") == (
+            target or self.design.get("target"))
+        buttons.button(QDialogButtonBox.Ok).setText(
+            "Update the program" if existing else "Insert code")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -294,5 +298,8 @@ class DesignerDialog(QDialog):
 
     def accept(self):
         self.design["handlers"] = self.handlers_box.isChecked()
+        # When the program already contains this window or page, the design
+        # is written back into it; otherwise new lines are produced.
+        self.merged = model.apply_to_source(self.design, self.source)
         self.code = model.generate_code(self.design, self.source)
         super().accept()

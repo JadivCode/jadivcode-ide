@@ -536,17 +536,22 @@ class MainWindow(QMainWindow):
 
     def open_designer(self, target="GUI"):
         dialog = DesignerDialog(self, self.editor.toPlainText(), target)
-        if dialog.exec_() == DesignerDialog.Accepted and dialog.code:
+        if dialog.exec_() != DesignerDialog.Accepted:
+            return
+        if dialog.merged is not None:
+            # The window or page was already in the program: update it in place.
+            self.editor.replace_all(dialog.merged)
+        elif dialog.code:
             self.insert_line(dialog.code.rstrip("\n"))
+        self.run_check()
 
     def open_blocks(self):
         from .blocks import BlocksDialog
         dialog = BlocksDialog(self, self.editor.toPlainText())
-        if dialog.exec_() == BlocksDialog.Accepted and dialog.code:
-            if dialog.replace:
-                self.editor.replace_all(dialog.code)
-            else:
-                self.insert_line(dialog.code.rstrip("\n"))
+        if dialog.exec_() == BlocksDialog.Accepted:
+            # The blocks show the whole program, so they replace all of it.
+            self.editor.replace_all(dialog.code)
+            self.run_check()
 
     def ask_ai(self):
         if self.ai_worker is not None:

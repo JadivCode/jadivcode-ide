@@ -99,6 +99,150 @@ LANGUAGE = [
     ]),
 ]
 
+RECIPES = [
+    ("A window with a button",
+     "Import GUI\n\nGUI Title = My app\nGUI Size = 320x160\n\n"
+     "Define Message = GUI Text \"Press the button\" at 20, 20\n"
+     "Define Go = GUI Button \"Press me\" at 20, 60\n\n"
+     "On Go\n    Set Message = Pressed\nEnd",
+     "The smallest window program. Every item has a name; 'On Go' runs when the button "
+     "is clicked. The window opens by itself."),
+    ("A window that counts clicks",
+     "Import GUI\n\nGUI Title = Counter\n"
+     "Define Message = GUI Text \"Count: 0\" at 20, 20\n"
+     "Define More = GUI Button \"Add one\" at 20, 60\n"
+     "Define Count = 0\n\n"
+     "On More\n    Set Count = Count + 1\n    Set Message = Count: {Count}\nEnd",
+     "Keeps a number in a value and shows it in a text item."),
+    ("A text box: read what the user types",
+     "Import GUI\n\n"
+     "Define Hint = GUI Text \"Type your name and press Enter:\" at 20, 15\n"
+     "Define Field = GUI Input at 20, 45 size 200, 28\n"
+     "Define Hello = GUI Text \"\" at 20, 90\n\n"
+     "On Field\n    Set Hello = Hello, {Event}!\nEnd",
+     "'On Field' runs when Enter is pressed. {Event} is the typed text; {Field} gives the "
+     "same text at any time."),
+    ("A calculator window",
+     "Import GUI\nImport Math\n\nGUI Title = Calculator\n"
+     "Define Field = GUI Input at 20, 20 size 220, 28\n"
+     "Define Result = GUI Text \"Type a calculation and press Enter\" at 20, 60\n\n"
+     "On Field\n    Define Answer = {Math Event}\n    If Success = \"None\"\n"
+     "        Set Result = That is not a calculation\n    Else\n"
+     "        Set Result = {Event} = {Answer}\n    End\nEnd",
+     "Math calculates the typed text. Success is \"None\" when the line before failed."),
+    ("A checkbox and a slider",
+     "Import GUI\n\n"
+     "Define Agree = GUI Checkbox \"Switch the lamp\" at 20, 20\n"
+     "Define Level = GUI Slider 50 at 20, 60\n"
+     "Define Status = GUI Text \"\" at 20, 120\n\n"
+     "On Agree\n    Set Status = Lamp is {Agree}\nEnd\n\n"
+     "On Level\n    Set Status = Brightness {Event}\nEnd",
+     "A checkbox holds ON or OFF, a slider a number from 0 to 100."),
+    ("Change how an item looks",
+     "Import GUI\n\nDefine Hello = GUI Text \"Hello\" at 20, 20\n"
+     "Set Hello Color = red\nSet Hello Size = 18\nWait 2s\nSet Hello = Goodbye\n"
+     "Wait 2s\nStop Hello",
+     "Properties: Text, Value, Color, Background, Size, Enabled, X, Y, W, H. "
+     "'Stop Hello' removes the item."),
+    ("Two windows",
+     "Import GUI\n\nGUI Title = Main\n"
+     "Define Open = GUI Button \"Open settings\" at 20, 20\n"
+     "Define Second = GUI Window #2\nSet Second Title = Settings\n"
+     "Define Close = GUI Button \"Close\" at 20, 20 on Window #2\n\n"
+     "On Open \"Start Second\"\nOn Close \"Stop Second\"",
+     "Items go to the first window unless you add 'on Window #2'. Start shows a window, "
+     "Stop closes it."),
+    ("A web page that switches a lamp",
+     "Import WebUI\nImport GPIO\n\nDefine Lamp = GPIO #17\n\n"
+     "WebUI Title = Lamp panel\n"
+     "Define Status = WebUI Text \"The lamp is OFF\"\n"
+     "Define Toggle = WebUI Button \"Toggle lamp\"\n\n"
+     "On Toggle\n    If Lamp = ON then Set Lamp = OFF else Set Lamp = ON\n"
+     "    Set Status = The lamp is {Lamp}\nEnd",
+     "Open http://localhost:8080/ while the program runs. WebUI items work like GUI items."),
+    ("A web page for your phone (with a password)",
+     "Import WebUI\nImport System\n\nWebUI Title = My panel\nWebUI Host = 0.0.0.0\n"
+     "WebUI Password = {System Env \"PAGE_PASSWORD\"}\n\n"
+     "Define Hello = WebUI Text \"Hello from JadivCode\"",
+     "Host 0.0.0.0 lets other devices connect, so a password is needed. Start the program "
+     "with PAGE_PASSWORD set in the environment."),
+    ("Blink an LED",
+     "Import GPIO\n\nDefine Led = GPIO #17\n\nRepeat 10 times\n    Set Led = ON\n"
+     "    Wait 500ms\n    Set Led = OFF\n    Wait 500ms\nEnd",
+     "Pins use BCM numbers. Without a Raspberry Pi the pin is simulated."),
+    ("A push button switches a lamp",
+     "Import GPIO\n\nDefine Button = GPIO Input #4 PullDown\nDefine Lamp = GPIO #17\n\n"
+     "On Button Pressed\n    If Lamp = ON then Set Lamp = OFF else Set Lamp = ON\nEnd",
+     "Events of an input pin: Pressed, Released, Changed."),
+    ("Dim with PWM",
+     "Import GPIO\n\nDefine Fan = GPIO PWM #18\n\nFor Speed = 0 to 100 step 20\n"
+     "    Set Fan = Speed\n    Wait 1s\nEnd\nSet Fan = OFF",
+     "A PWM pin takes a value from 0 to 100."),
+    ("Send a webhook (Home Assistant)",
+     "Import Web\nImport System\n\nDefine Address = {System Env \"HA_WEBHOOK\"}\n"
+     "Web Json Address = state: on, source: jadivcode\n"
+     "If Success = \"Full\" then \"Write = sent\" else \"Write = failed: {Error}\"",
+     "The address is read from the environment because it works like a password."),
+    ("Receive a webhook",
+     "Import Web\n\nDefine Server = Web Server #8090\n"
+     "Define Hook = Web Read Hook {} on Server #8090\n\n"
+     "On Hook \"/lamp\"\n    Write = Received {Event}\nEnd",
+     "Try it with: curl -X POST http://localhost:8090/lamp -d '{\"state\": \"on\"}'"),
+    ("Read data from the internet",
+     "Import Web\n\nDefine Data = {Web Json \"https://api.example.com/data\"}\n"
+     "If Success = \"Full\"\n    Write = Temperature: {Data #\"temperature\"}\nElse\n"
+     "    Write = Could not read: {Error}\nEnd",
+     "Web Json turns the answer into a value; read its fields with #\"name\"."),
+    ("Save and read notes in a file",
+     "Import File\nImport Time\n\nAsk Note = What do you want to remember?\n"
+     "File Append \"notes.txt\" = {Time Date} {Note}\n\n"
+     "For each Line in {File Lines \"notes.txt\"}\n    Write = {Line}\nEnd",
+     "Append adds a line; Lines reads the file as a list."),
+    ("A guessing game",
+     "Import Math\n\nDefine Secret = {Math Random 1 20}\nDefine Tries = 0\n\n"
+     "Forever\n    Ask Guess = Your guess?\n    Set Tries = Tries + 1\n"
+     "    If Guess = Secret\n        Write = Correct after {Tries} tries\n        Break\n"
+     "    Else If Guess < Secret\n        Write = Too small\n    Else\n"
+     "        Write = Too big\n    End\nEnd",
+     "Shows Forever, Break and Else If together."),
+    ("Do something every few seconds",
+     "Import Time\n\nForever\n    Write = It is {Time Now}\n    Wait 5s\nEnd",
+     "An endless loop always needs a Wait."),
+]
+
+BLOCKS_HELP = [
+    ("What a block is", "",
+     "One block is one line of the program. Blocks joined from top to bottom run in "
+     "that order."),
+    ("Joining blocks", "",
+     "Drag from a coloured dot at the bottom of a block onto the block that comes next. "
+     "Drag a dot to empty space to remove the link."),
+    ("The dots of If", "",
+     "yes: blocks to run when the condition is true. no: blocks to run otherwise. "
+     "next: what happens after the If, in both cases."),
+    ("The inside dot", "",
+     "Repeat, While, Forever, 'When this is used' and 'Block of lines' contain other "
+     "blocks. Join the first contained block to the inside dot, and the block that "
+     "follows the whole thing to next."),
+    ("When this is used", "On Go\n    Write = pressed\nEnd",
+     "Runs its inside blocks when a button is clicked, a pin changes or a webhook "
+     "arrives. Type the name of the item, pin or event into the block."),
+    ("Any line", "Import GUI",
+     "Holds one line of JadivCode exactly as written. Use it for Import, library "
+     "commands, Call, Add, Break and anything else without its own block."),
+    ("Block of lines", "For I = 1 to 10\n    Write = {I}\nEnd",
+     "A For loop or a Function: its first line is typed into the block and the lines "
+     "it contains are joined to the inside dot."),
+    ("Windows and web pages in blocks", "Define Go = GUI Button \"Press me\" at 20, 60",
+     "Each item is a Define block. React to it with a 'When this is used' block that "
+     "carries the item's name. The Recipes section has complete examples; the designers "
+     "in the Tools menu place items with the mouse."),
+    ("Blocks and text are the same program", "",
+     "Opening Blocks reads the program text. 'Update the program' writes the blocks "
+     "back as text. Edit whichever is easier."),
+    ("Tidy up", "", "Arranges all joined blocks in neat columns."),
+]
+
 CHECKER = [
     ("E101", "Text is missing its closing quote."),
     ("E201 / E202", "End without a block / a block that is never closed with End."),
@@ -123,9 +267,14 @@ CHECKER = [
 ]
 
 
-def sections():
-    """All help sections: [(section title, [(title, insert text, explanation)])]."""
-    result = [("Language: " + title, entries) for title, entries in LANGUAGE]
+def sections(blocks=False):
+    """All help sections: [(section title, [(title, insert text, explanation)])].
+
+    With ``blocks=True`` the list starts with help for the block editor.
+    """
+    result = [("Using blocks", BLOCKS_HELP)] if blocks else []
+    result.append(("Recipes: complete examples", RECIPES))
+    result += [("Language: " + title, entries) for title, entries in LANGUAGE]
     for cls in LIBRARIES.values():
         entries = [(f"Import {cls.name}", f"Import {cls.name}", cls.summary)]
         entries += [(command, command, description) for command, description in cls.commands]
