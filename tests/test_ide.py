@@ -6,6 +6,9 @@ import tempfile
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Tests must not contact the update server or touch the user's settings.
+os.environ["JADIVCODE_NO_UPDATE_CHECK"] = "1"
+os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="jadivcode-ide-test-")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from jadivcode_ide import designer_model as model  # noqa: E402
@@ -350,3 +353,190 @@ class NewToolsWindowTest(unittest.TestCase):
         self.assertEqual([b["type"] for b in graph["blocks"]], ["start", "define", "if", "write"])
         window.editor.document().setModified(False)
         window.close()
+
+
+class UpdaterTest(unittest.TestCase):
+    def setUp(self):
+        from jadivcode_ide import updater
+        self.updater = updater
+
+    def fetch(self, versions):
+        def fake(url):
+            for key, version in versions.items():
+                if f"/{key}/main/" in url and url.endswith("__init__.py"):
+                    return f'"""doc"""\n\n__version__ = "{version}"\n'
+            return "#!/usr/bin/env bash\n# JadivCode installer\n"
+        return fake
+
+    def test_version_comparison(self):
+        newer = self.updater.is_newer
+        self.assertTrue(newer("0.2.0", "0.1.0"))
+        self.assertTrue(newer("0.10.0", "0.9.9"))
+        self.assertTrue(newer("1.0", "0.9.9"))
+        self.assertFalse(newer("0.2.0", "0.2.0"))
+        self.assertFalse(newer("0.2", "0.2.0"))
+        self.assertFalse(newer("0.1.9", "0.2.0"))
+        self.assertFalse(newer("garbage", "0.2.0"))
+        self.assertEqual(self.updater.parse_version("1.2.3-beta4"), (1, 2, 3))
+
+    def test_check_reports_what_is_newer_and_who_manages_it(self):
+        with tempfile.TemporaryDirectory() as data:
+            os.makedirs(os.path.join(data, "jadivcode"))
+            previous = os.environ.get("XDG_DATA_HOME")
+            os.environ["XDG_DATA_HOME"] = data
+            try:
+                results = self.updater.check(
+                    {"JadivCode": ("0.1.0", os.path.join(data, "jadivcode")),
+                     "JadivCode IDE": ("0.2.0", "/somewhere/else")},
+                    self.fetch({"jadivcode": "0.3.0", "jadivcode-ide": "0.2.0"}))
+            finally:
+                if previous is None:
+                    del os.environ["XDG_DATA_HOME"]
+                else:
+                    os.environ["XDG_DATA_HOME"] = previous
+        core, ide = results
+        self.assertEqual((core["newer"], core["managed"], core["latest"]), (True, True, "0.3.0"))
+        self.assertEqual((ide["newer"], ide["managed"]), (False, False))
+        self.assertEqual(self.updater.summary(results),
+                         "Update available: JadivCode 0.3.0 (you have 0.1.0).")
+        self.assertEqual(self.updater.summary([ide]), "JadivCode and the IDE are up to date.")
+
+    def test_bad_downloads_are_refused(self):
+        updater = self.updater
+        with self.assertRaises(updater.UpdateError):
+            updater.download("http://example.com/install.sh")
+        with self.assertRaises(updater.UpdateError):
+            updater.remote_version("JadivCode", lambda url: "no version here")
+        with self.assertRaises(updater.UpdateError):
+            updater.installer_script("JadivCode", lambda url: "<html>Not found</html>")
+        self.assertTrue(updater.installer_script("JadivCode", self.fetch({})).startswith("#!"))
+
+
+class UpdateWindowTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PyQt5.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def window(self):
+        from PyQt5.QtWidgets import QMessageBox
+        from jadivcode_ide import app as ide
+        self.shown = []
+        self.answer = QMessageBox.No
+        self.patches = (QMessageBox.information, QMessageBox.question, QMessageBox.warning)
+        QMessageBox.information = staticmethod(
+            lambda parent, title, text, *a: self.shown.append(("info", text)))
+        QMessageBox.warning = staticmethod(
+            lambda parent, title, text, *a: self.shown.append(("warning", text)))
+
+        def question(parent, title, text, *a):
+            self.shown.append(("question", text))
+            return self.answer
+        QMessageBox.question = staticmethod(question)
+        self.addCleanup(self.restore)
+        window = ide.MainWindow()
+        window.settings.clear()
+        return window
+
+    def restore(self):
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.information, QMessageBox.question, QMessageBox.warning = self.patches
+
+    def result(self, managed=True):
+        return [{"name": "JadivCode", "installed": "0.1.0", "latest": "0.3.0", "newer": True,
+                 "managed": managed},
+                {"name": "JadivCode IDE", "installed": "0.2.0", "latest": "0.2.0",
+                 "newer": False, "managed": True}]
+
+    def close(self, window):
+        window.editor.document().setModified(False)
+        window.close()
+
+    def test_menu_and_setting(self):
+        window = self.window()
+        self.assertTrue(window.act_auto_update.isChecked())
+        window.act_auto_update.setChecked(False)
+        self.assertFalse(window.settings.value("check_updates_at_start", True, type=bool))
+        window.act_auto_update.setChecked(True)
+        self.close(window)
+
+    def test_up_to_date_and_errors(self):
+        window = self.window()
+        window.update_silent = False
+        window.updates_checked([self.result()[1]], "")
+        self.assertEqual(self.shown, [("info", "JadivCode and the IDE are up to date.")])
+        self.shown.clear()
+        window.update_silent = True          # the check made at start stays quiet
+        window.updates_checked([self.result()[1]], "")
+        window.updates_checked([], "Cannot reach the update server")
+        self.assertEqual(self.shown, [])
+        window.update_silent = False
+        window.updates_checked([], "Cannot reach the update server")
+        self.assertEqual(self.shown[0][0], "warning")
+        self.close(window)
+
+    def test_declined_update_is_not_offered_again_at_start(self):
+        window = self.window()
+        window.update_silent = True
+        window.updates_checked(self.result(), "")
+        self.assertEqual(self.shown[0][0], "question")
+        self.assertIn("JadivCode: 0.1.0  ->  0.3.0", self.shown[0][1])
+        self.shown.clear()
+        window.updates_checked(self.result(), "")      # same update, same start check
+        self.assertEqual(self.shown, [])
+        window.update_silent = False                    # asking by hand offers it again
+        window.updates_checked(self.result(), "")
+        self.assertEqual(self.shown[0][0], "question")
+        self.close(window)
+
+    def test_copy_not_from_the_installer_is_only_reported(self):
+        window = self.window()
+        window.update_silent = False
+        window.updates_checked(self.result(managed=False), "")
+        self.assertEqual(self.shown[0][0], "info")
+        self.assertIn("was not installed with the JadivCode installer", self.shown[0][1])
+        self.close(window)
+
+    def test_installers_run_one_after_another(self):
+        from PyQt5.QtCore import QEventLoop, QTimer
+        window = self.window()
+        folder = tempfile.mkdtemp()
+        scripts = []
+        for name in ("JadivCode", "JadivCode IDE"):
+            path = os.path.join(folder, name.replace(" ", "-") + ".sh")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"#!/bin/sh\necho installed {name}\n")
+            scripts.append((name, path))
+        loop = QEventLoop()
+        window.updates_prepared(scripts, "")
+        timer = QTimer()
+        timer.timeout.connect(lambda: loop.quit() if self.shown else None)
+        timer.start(50)
+        QTimer.singleShot(15000, loop.quit)
+        loop.exec_()
+        text = window.output.toPlainText()
+        self.assertIn("installed JadivCode\n", text)
+        self.assertIn("installed JadivCode IDE", text)
+        self.assertLess(text.index("installed JadivCode\n"), text.index("installed JadivCode IDE"))
+        self.assertIn("Close and start the IDE again", self.shown[-1][1])
+        self.assertFalse(os.path.exists(scripts[0][1]))
+        self.assertTrue(window.act_update.isEnabled())
+        self.close(window)
+
+    def test_failed_installer_is_reported(self):
+        from PyQt5.QtCore import QEventLoop, QTimer
+        window = self.window()
+        path = os.path.join(tempfile.mkdtemp(), "bad.sh")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho broken\nexit 3\n")
+        loop = QEventLoop()
+        window.updates_prepared([("JadivCode", path), ("JadivCode IDE", path)], "")
+        timer = QTimer()
+        timer.timeout.connect(lambda: loop.quit() if self.shown else None)
+        timer.start(50)
+        QTimer.singleShot(15000, loop.quit)
+        loop.exec_()
+        self.assertEqual(self.shown[-1][0], "warning")
+        self.assertIn("ended with code 3", window.output.toPlainText())
+        self.assertEqual(window.output.toPlainText().count("broken"), 1)
+        self.close(window)

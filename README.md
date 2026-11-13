@@ -18,6 +18,7 @@ programming language on Linux.
   is already in the program and write changes back in place.
 - **AI helper** (optional): explains problems in plain words. Your program
   is sent to the Claude API only when you ask for it.
+- **Updates**: the IDE can update itself and JadivCode.
 
 ## Install
 
@@ -102,6 +103,23 @@ code** and adds new lines at the cursor.
 
 Items snap to a 5 pixel grid. A web page places items from top to bottom
 in the order you arrange them; exact positions are used only for windows.
+
+## Updates
+
+**Help → Check for updates** looks for a newer JadivCode and JadivCode IDE
+and, after you agree, installs both by running their installers. The IDE
+also looks once at start, in the background; switch that off with
+**Help → Check for updates at start**.
+
+- An update is offered when the version number on the `main` branch of the
+  repository is higher than the installed one.
+- The check downloads two small files from `raw.githubusercontent.com`.
+  Nothing about you or your programs is sent.
+- If you say no to an update, the check at start does not ask about the
+  same version again.
+- A copy that was not installed with the installer (a git folder, Code
+  Master) is only reported; update it the way you installed it.
+- Restart the IDE after an update.
 
 ## Development
 
